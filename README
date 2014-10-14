@@ -1,0 +1,6 @@
+Il modulo configura NRPE sugli host monitorati con questo sistema e esporta le risorse
+necessarie al nagios server, in modo che ad ogni risorsa monitorata sul nodo monitorato
+corrisponda la configurazione necessaria sul server nagios.
+
+Il modulo richiede che sia definita la variabile "$nagios_server" corrispondente all'impostazione
+"allowed_hosts" in "/etc/nagios/nrpe.cfg".

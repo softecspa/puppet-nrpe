@@ -1,0 +1,42 @@
+#!/bin/bash
+
+DB_HOST='muscolo.backplane'
+DB_NAME='urchin'
+DB_USER='urchin'
+DB_PASS='urcaurca'
+
+TASK_TABLE='uprofiles_tasks'
+START_PROCESS='utpt_process_start_time'
+STATUS='uipt_status'
+PROFILE_NAME='ucpr_name'
+HITS_COUNT='uspt_data_hits'
+
+DATA=`date +%Y-%m-%d`
+
+#Test della connessione
+mysql -u $DB_USER -p$DB_PASS -h $DB_HOST -D $DB_NAME -e "STATUS" &> /dev/null
+
+if [ $? -ne 0 ]
+then
+    echo "Impossibile connettersi al db $DB_HOST"
+    exit 2
+else
+    #Query che estre le ultime esecuzioni di ogni profilo che hanno dato errore
+    PROFILES_CRITICAL=`mysql -u $DB_USER -p$DB_PASS -h $DB_HOST -D $DB_NAME -e "SELECT $PROFILE_NAME FROM $TASK_TABLE WHERE $START_PROCESS LIKE '$DATA%' AND $START_PROCESS IN (select MAX($START_PROCESS) FROM $TASK_TABLE WHERE $START_PROCESS LIKE '$DATA%' GROUP BY $PROFILE_NAME) AND $STATUS=3 \G" | grep $PROFILE_NAME | awk '{print $2}'`
+    if [ -z "$PROFILES_CRITICAL" ]
+    then
+        #Query che estrae le ultime esecuzioni di ogni profilo che hanno generato numero di hints pari a 0
+        PROFILES_WARNING=`mysql -u $DB_USER -p$DB_PASS -h $DB_HOST -D $DB_NAME -e "SELECT $PROFILE_NAME FROM $TASK_TABLE WHERE $START_PROCESS LIKE '$DATA%' AND $START_PROCESS IN (select MAX($START_PROCESS) FROM $TASK_TABLE WHERE $START_PROCESS LIKE '$DATA%' GROUP BY $PROFILE_NAME) AND $HITS_COUNT=0\G" | grep $PROFILE_NAME | awk '{print $2}'`
+        if [ -z "$PROFILES_WARNING" ]
+        then
+            echo "OK"
+            exit 0
+        else
+            echo "WARNING: i seguenti profili hanno hits=0: "$PROFILES_WARNING
+            exit 1
+        fi
+    else
+        echo "CRITICAL: i seguenti profili non sono stati elaborati: "$PROFILES_CRITICAL
+        exit 2
+    fi
+fi

@@ -1,0 +1,1 @@
+Nota: puppet.cfg, tomcat.cfg non stanno in 'conf/' perche' sono gestiti da classi separate

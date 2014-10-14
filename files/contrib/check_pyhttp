@@ -1,0 +1,201 @@
+#!/usr/bin/env python
+
+"""Tramite questo plugin e' possibile eseguire un  check  HTTP autenticadosi su
+una applicazione con  Login  Form  e  opzionalmente ricercare una stringa
+presente nella pagina."""
+
+import os
+import re
+import sys
+import time
+
+libpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
+try:
+    sys.path.insert(0, os.path.realpath(os.environ['MYLIBDIR']))
+except KeyError:
+    sys.path.insert(0, libpath)
+
+try:
+    import mechanize
+    import nagiosplugin
+except ImportError as e:
+    print >>sys.stderr, ('Import Error: %s' % e)
+    sys.exit(2)
+
+__version__ = '0.1'
+__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+
+check = nagiosplugin.NagPlugin(pluginname='__file__)[0]',
+                               tagstatusline='HTTP',
+                               description='Check HTTP pages with Form Login',
+                               version=__version__)
+
+check.add_cmdlineoption('-H', '--hostname', 'host', 'Hostname or VirtualHost',
+                        required=True)
+check.add_cmdlineoption('-p', '--port', 'port', 'port to connect, default 80',
+                        default='80')
+check.add_cmdlineoption('-P', '--proto', 'proto',
+                        'protocol to use, http or https, default HTTP',
+                        default='http')
+check.add_cmdlineoption('-u', '--uri', 'uri', 'URI')
+check.add_cmdlineoption('-a', '--authorization', 'authorization',
+                        'Username and password, separated by ":"',
+                        required=True)
+check.add_cmdlineoption('-t', '--timeout', 'timeout',
+                        'HTTP timeout, default 10.0s', default=10.0,
+                        type=float)
+check.add_cmdlineoption('-s', '--string', 'string',
+                        'String (regexp) to expect in the page', type=str)
+check.add_cmdlineoption('-n', '--form-number', 'formnumber',
+                        'Form field numer, default 0', default=0, type=int)
+check.add_cmdlineoption('-x', '--form-username', 'formusername',
+                        'Form field username', default='username', type=str)
+check.add_cmdlineoption('-y', '--form-password', 'formpassword',
+                        'From field password', default='password', type=str)
+check.add_cmdlineoption('-w', '--warning', 'warning',
+                        'Response time in warning status, default 4.0s',
+                        default=4.0, type=float)
+check.add_cmdlineoption('-c', '--critical', 'critical',
+                        'Response time in critical status, default 8.0s',
+                        default=8.0, type=float)
+check.add_cmdlineoption('-z', '--failed-login-pattern', 'failedlogin',
+                        'Failed login pattern, \
+                        default [Uu]ser.+password\s+non\s+riconosciuti',
+                        default='[Uu]ser.+password\s+non\s+riconosciuti',
+                        type=str)
+
+check.parse_cmdlineoptions()
+
+(host,
+ port,
+ proto,
+ uri,
+ authorization,
+ timeout,
+ string,
+ form_number,
+ form_username,
+ form_password) = (check.options.host,
+                   check.options.port,
+                   check.options.proto,
+                   check.options.uri,
+                   check.options.authorization,
+                   check.options.timeout,
+                   check.options.string,
+                   check.options.formnumber,
+                   check.options.formusername,
+                   check.options.formpassword)
+
+(OK, WARNING, CRITICAL, UNKNOWN) = range(0, 4)
+
+try:
+    username, password = authorization.split(':')
+except ValueError:
+    check.ret2nagios(CRITICAL, 'Wrong format of authentication data, '
+                               'username and password must to be separated '
+                               'by ":"')
+
+warning = '%0.6f' % check.options.warning
+critical = '%0.6f' % check.options.critical
+
+# make URL
+if port == '80':
+    url = '%s://%s' % (proto, host)
+else:
+    url = '%s://%s:%s' % (proto, host, port)
+
+if uri:
+    if uri.startswith('/'):
+        uri = uri.replace('/', '', 1)
+    url = '%s/%s' % (url, uri)
+
+# pattern
+try:
+    failed_login_pattern = re.compile(check.options.failedlogin)
+    string_pattern = re.compile(string) if string else None
+except Exception as e:
+    check.ret2nagios(CRITICAL, '%s' % e)
+
+string_result = None
+br = mechanize.Browser()
+br_headers = '%s %s' % ('Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:17.0)',
+                        'Gecko/20100101 Firefox/17.0')
+br.addheaders = [('User-agent', br_headers)]
+
+check.verbose(1, 'Try open URL: %s' % url)
+start_time = time.time()
+
+try:
+    response = br.open(url, timeout=timeout)
+except Exception as e:
+    check.ret2nagios(CRITICAL, '%s: %s' % (url, e))
+
+# headers
+headers = response.info()
+check.verbose(1, 'URL: %s' % response.geturl())
+check.verbose(1, 'HTTP response code: %s' % response.code)
+check.verbose(1, 'HTTP headers:\n%s' % headers)
+check.verbose(1, 'Try login')
+
+# compile and submit login form
+try:
+    br.select_form(nr=form_number)
+    br.form[form_username] = username
+    br.form[form_password] = password
+    response_login = br.submit()
+except Exception as e:
+    br.close()
+    check.ret2nagios(CRITICAL, '%s' % e)
+
+# responde headers
+response_headers = response_login.info()
+# response time 'de no attri'
+response_time = '%0.6f' % (time.time() - start_time)
+# response login code
+response_login_code = response_login.code
+# collect data
+data = response_login.readlines()
+# close connection :)
+response_login.close()
+
+check.verbose(1, 'HTTP response code: %s' % response_login_code)
+check.verbose(1, 'HTTP headers:\n%s' % response_headers)
+check.verbose(2, 'Source Page\n %s' % response_login.get_data())
+
+# nagios output
+nagios_out = '%s bytes in %ss' % (headers['Content-Length'], response_time)
+# nagios performance data
+check.add_performancedata('time', response_time, 's', warn=warning,
+                          crit=critical)
+check.add_performancedata('size', headers['Content-Length'], 'B')
+
+for line in data:
+    f = failed_login_pattern.search(line)
+    if string_pattern:
+        m = string_pattern.search(line)
+        if m:
+            string_result = m.group(0)
+    if f:
+        check.ret2nagios(CRITICAL, f.group(0),
+                         performancedata=check.performancedata)
+
+# Nagios output
+nagios_out = '%s, login OK' % nagios_out
+
+if string and not string_result:
+    nagios_out = ('%s, %r NOT found' % (nagios_out, string))
+    check.ret2nagios(CRITICAL, nagios_out,
+                     performancedata=check.performancedata)
+elif string and string_result:
+    nagios_out = ('%s, %r found' % (nagios_out, string_result))
+
+check.add_output(nagios_out)
+
+try:
+    check.add_returncode(check.value_wc_to_returncode(float(response_time),
+                                                      float(warning),
+                                                      float(critical)))
+except ValueError as e:
+    check.ret2nagios(UNKNOWN, '%s' % e)
+
+check.exit()

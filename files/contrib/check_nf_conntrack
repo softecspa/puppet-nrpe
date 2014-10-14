@@ -1,0 +1,136 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+
+libpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
+try:
+    sys.path.insert(0, os.path.realpath(os.environ['MYLIBDIR']))
+except KeyError:
+    sys.path.insert(0, libpath)
+
+import errno
+import nagiosplugin
+import shlex
+import signal
+import subprocess
+from functools import wraps
+
+
+__version__ = '0.0.1'
+__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+
+
+filename = os.path.splitext(__file__)[0]
+
+check = nagiosplugin.NagPlugin(pluginname=filename,
+                               tagstatusline='NF_CONNTRACK',
+                               description='Python check nf_conntrack',
+                               version=__version__)
+
+check.add_cmdlineoption('-w', '--warning', 'warning', 'Warning if less than '
+                        'PERCENT utilizage of nf_conntrack free connections, '
+                        'default 25:', default='25:', )
+check.add_cmdlineoption('-c', '--critical', 'critical', 'Critical if less '
+                        'than PERCENT utilizage of nf_conntrack free '
+                        'connections, default 15:', default='15:')
+check.add_cmdlineoption('-t', '--timeout', 'tmout', 'Command timeout, '
+                        'default 10s', default=10, type=int)
+
+check.parse_cmdlineoptions()
+
+(warning,
+ critical,
+ tmout) = (check.options.warning,
+           check.options.critical,
+           check.options.tmout)
+
+(OK, WARNING, CRITICAL, UNKNOWN) = range(0, 4)
+cmd_nf_conntrack_count = '/sbin/sysctl -n net.netfilter.nf_conntrack_count'
+cmd_nf_conntrack_max = '/sbin/sysctl -n net.netfilter.nf_conntrack_max'
+
+
+class TimeoutError(Exception):
+    pass
+
+
+def timeout(seconds=10, message=os.strerror(errno.ETIME)):
+    def decorator(func):
+        def _handle_timeout(signum, frame):
+            raise TimeoutError(message)
+
+        def wrapper(*args, **kwargs):
+            signal.signal(signal.SIGALRM, _handle_timeout)
+            signal.alarm(seconds)
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                signal.alarm(0)
+            return result
+
+        return wraps(func)(wrapper)
+
+    return decorator
+
+
+class CheckOutput(object):
+
+    def __init__(self, stderr_to_stdout=True, sudo=False, shell=False):
+        self.stderr_to_stdout = stderr_to_stdout
+        self.sudo = sudo
+        self.shell = shell
+
+    # FixMe: tmout e' globale
+    @timeout(seconds=tmout, message=('Timer expired in %ds' % tmout))
+    def check_output(self, cmd):
+        if self.sudo is True:
+            cmd = ('%s %s' % ('sudo', cmd))
+
+        cmd = shlex.split(cmd) if self.shell is False else cmd
+        stdout = subprocess.PIPE
+        stderr = subprocess.PIPE
+
+        if self.stderr_to_stdout is True:
+            stderr = subprocess.STDOUT
+
+        if sys.version_info < (2, 7):
+            return subprocess.Popen(cmd, stdout=stdout, stderr=stderr).\
+                communicate()
+
+        return subprocess.check_output(cmd, shell=self.shell, stderr=stderr)
+
+
+try:
+    sp = CheckOutput()
+    nf_conntrack_count = sp.check_output(cmd_nf_conntrack_count).strip()
+    nf_conntrack_max = sp.check_output(cmd_nf_conntrack_max).strip()
+except subprocess.CalledProcessError as e:
+    check.ret2nagios(CRITICAL, 'subprocess CalledProcessError: %s' % e)
+except TimeoutError as e:
+    check.ret2nagios(CRITICAL, 'subprocess cmd: %s' % e)
+except Exception as e:
+    check.ret2nagios(CRITICAL, 'Unexpected Error: %s' % e)
+
+try:
+    # % percentage
+    usage = int(float(nf_conntrack_count) / float(nf_conntrack_max) * 100)
+    free = 100 - usage
+except Exception as e:
+    check.ret2nagios(CRITICAL, 'Unexpected Error: %s' % e)
+
+check.verbose(1,  ('nf_conntrack_count=%s, nf_conntrack_count,=%s' %
+                   (nf_conntrack_count, nf_conntrack_max)))
+check.verbose(1,  ('usage=%s, free=%s' % (usage, free)))
+
+check.add_performancedata('nf_conntrack_count', nf_conntrack_count, '',
+                          warn=0, crit=0, min=0, max=nf_conntrack_max)
+
+check.add_output(
+    'usage=%s%s, free=%s%s nf_conntrack_count=%s nf_conntrack_max=%s' %
+    (usage, '%', free, '%', nf_conntrack_count, nf_conntrack_max))
+
+check.add_returncode(check.value_wc_to_returncode(free, warning, critical))
+check.exit()
+
+# EOF

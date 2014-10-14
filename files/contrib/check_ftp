@@ -1,0 +1,193 @@
+#!/usr/bin/python
+
+"""\
+
+Nagios plugin per check su server FTP.
+
+- si connette al server FTP
+- crea, in locale, un file temporaneo con
+   GIORNO MESE NUM_DEL_GIORNO HH:MM:SS YYYY
+- esegue un LIST, output su /dev/null
+- crea una directory
+- si sposta al suo interno
+- esegue l'upload del file temporaneo locale
+- esegue il download del file precedentemente uploadato
+- cancella il file e la directory
+- chiude la connessione
+- verifica, in locale, il checksum MD5 tra il file temporaneo e il file
+   uploadato
+- cancella, in locale, i file temporanei
+- i tempi di esecuzione vengono calcolati dal LIST alla chiusura (quit)
+   della connessione con il server
+
+"""
+
+import ftplib
+import os
+import sys
+import tempfile
+import time
+import socket
+
+libpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
+try:
+    sys.path.insert(0, os.path.realpath(os.environ['MYLIBDIR']))
+except KeyError:
+    sys.path.insert(0, libpath)
+
+from md5sum import md5sum
+import nagiosplugin
+
+__version__ = '0.1 alpha'
+__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+
+
+filename = os.path.splitext(__file__)[0]
+
+check = nagiosplugin.NagPlugin(pluginname=filename,
+                               tagstatusline='FTP',
+                               description='Python check FTP server',
+                               version=__version__)
+
+check.add_cmdlineoption('-H', '--hostname', 'host', 'Hostname', required=True)
+check.add_cmdlineoption('-u', '--user', 'user', 'Username',
+                        required=True)
+check.add_cmdlineoption('-p', '--passwd', 'passwd', 'Password',
+                        required=True)
+check.add_cmdlineoption('-t', '--timeout', 'timeout',
+                        'Timeout, default 10s', default=10, type=float)
+check.add_cmdlineoption('-s', '--ssl', 'ssl',
+                        'Connects to the server over an SSL encrypted socket',
+                        action='store_true')
+check.add_cmdlineoption('-P', '--no-passive', 'passive',
+                        'Disable FTP passive mode, default is True',
+                        action='store_false')
+check.add_cmdlineoption('-D', '--debug-level', 'debuglevel',
+                        'Debug level, from 0 to 2, default 0',
+                        default=0, type=int)
+check.add_cmdlineoption('-w', '--warning', 'warning',
+                        'Warning threshold, default 1s',
+                        default=1.0, type=float)
+check.add_cmdlineoption('-c', '--critical', 'critical',
+                        'Critical threshold, default 2s',
+                        default=2.0, type=float)
+check.add_cmdlineoption('-b', '--buffer-size', 'buffersize',
+                        'buffer size, default 1024 byte',
+                        default=1024, type=int)
+
+check.parse_cmdlineoptions()
+
+if check.options.debuglevel < 0 or check.options.debuglevel > 2:
+    check.parse_error('Debug level must to be: from 0 to 2')
+
+(host,
+ user,
+ passwd,
+ timeout,
+ ssl,
+ passive,
+ debuglevel,
+ warning,
+ critical,
+ buffersize) = (check.options.host,
+                check.options.user,
+                check.options.passwd,
+                check.options.timeout,
+                check.options.ssl,
+                check.options.passive,
+                check.options.debuglevel,
+                check.options.warning,
+                check.options.critical,
+                check.options.buffersize)
+
+
+(OK, WARNING, CRITICAL, UNKNOWN) = range(0, 4)
+dirname = '{}_dir'.format(filename)
+
+try:
+    if not ssl:
+        _ftplib = ftplib.FTP
+    else:
+        _ftplib = ftplib.FTP_TLS
+
+    ftp = _ftplib(host=host, user=user, passwd=passwd, timeout=timeout)
+except (ftplib.all_errors) as err:
+    check.ret2nagios(CRITICAL, 'FTP Error: {0} {1}'.format(host, err))
+
+ftp.set_debuglevel(debuglevel)
+check.verbose(1, 'FTP passive: {0}'.format(passive))
+ftp.set_pasv(passive)
+
+try:
+    tmpfile = tempfile.NamedTemporaryFile(prefix='{0}_'.format(filename),
+                                          dir='/tmp',
+                                          delete=False)
+    check.verbose(1, 'Write {0}'.format(tmpfile.name))
+    tmpfile.write('{0} ({1})\n'.format(time.ctime(), time.time()))
+    tmpfile.flush()
+except EnvironmentError as err:
+    raise SystemExit('Environment Error: {0}'.format(err))
+
+dstfile = '{0}.remote'.format(tmpfile.name)
+dstfh = open(dstfile, 'wb')
+
+try:
+    start_time = time.time()
+
+    check.verbose(1, 'FTP LIST {0}'.format(host))
+    with open(os.devnull, 'w') as devnullfh:
+        ftp.retrlines('LIST', lambda s, w=devnullfh.write: w(s))
+
+    check.verbose(1, 'FTP mkd() {0}:{1}'.format(host, dirname))
+    ftp.mkd(dirname)
+
+    check.verbose(1, 'FTP cwd() {0}:{1}'.format(host, dirname))
+    ftp.cwd(dirname)
+
+    check.verbose(1, 'FTP STOR {0} to {1}/{2}{3}'.format(
+        tmpfile.name, host, dirname, filename))
+    with open(tmpfile.name, 'rb') as tmpfh:
+        ftp.storbinary('STOR ' + filename, tmpfh, buffersize)
+
+    check.verbose(1, 'FTP RETR {0}/{1}/{2} to {3}'.format(
+        host, dirname, filename, dstfile))
+    ftp.retrbinary('RETR ' + filename, dstfh.write, buffersize)
+
+    ftp.delete(filename)
+    ftp.cwd('..')
+    ftp.rmd(dirname)
+except (ftplib.all_errors) as err:
+    check.ret2nagios(CRITICAL, 'FTP Error: {0} {1}'.format(host, err))
+finally:
+    try:
+        ftp.quit()
+    except (socket.timeout):
+        check.ret2nagios(CRITICAL, 'FTP Timeout: ftp.quit()')
+    finally:
+        elapsed_time = round((time.time() - start_time), 6)
+        dstfh.close()
+        tmpfile.close()
+        cksum1 = md5sum(tmpfile.name)
+        cksum2 = md5sum(dstfile)
+        tmpfile.unlink(tmpfile.name)
+        os.unlink(dstfile)
+
+warning = '{0:f}'.format(warning)
+critical = '{0:f}'.format(critical)
+
+check.verbose(1, 'MD5 {0}:{1} to {2}:{3}'.format(cksum1[1], cksum1[0],
+                                                 cksum2[1], cksum2[0]))
+
+if cksum1[0] != cksum2[0]:
+    check.ret2nagios(CRITICAL, '{0} MD5 mismatch'.format(host))
+
+check.add_output(host)
+check.add_performancedata('time', elapsed_time, 's', warn=warning,
+                          crit=critical, min=0, max=critical)
+
+check.add_returncode(
+    check.value_wc_to_returncode(elapsed_time, warning, critical))
+
+check.exit()
+
+# EOF

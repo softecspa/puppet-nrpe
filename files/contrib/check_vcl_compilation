@@ -1,0 +1,24 @@
+#!/bin/bash
+#asagratini, script per testare la configurazione di Varnish
+
+if [ $1 ]; then
+    if [ -e $1 ]; then
+        FILE=$1
+    else
+        echo "CRITICAL - File does not exist"
+        exit 2
+    fi
+else
+    echo "CRITICAL - Please pass vcl file to test"
+    exit 2
+fi
+
+STATUS=`sudo /usr/sbin/varnishd -C -f $FILE`
+
+if [ $? -eq 0 ]; then
+    echo "OK - Vcl compilation is fine"
+    exit 0
+else
+    echo "CRITICAL - Vcl compilation failed"
+    exit 2
+fi

@@ -1,0 +1,3 @@
+Cmnd_Alias  NAGIOS_CHECK_HAPROXY = /usr/lib/nagios/plugins/contrib/check_haproxy_stats.pl
+
+nagios  ALL=(ALL) NOPASSWD: NAGIOS_CHECK_HAPROXY

@@ -1,0 +1,198 @@
+#!/usr/bin/env python
+
+"""\
+
+Lo scopo del plugin e' quello di verificare che non ci siano TRUNK del
+centralino DexGate nello stato DEREGISTERED.
+
+ATTENZIONE: Managed by Puppet
+
+"""
+
+import os
+import sys
+
+libpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
+try:
+    sys.path.insert(0, os.path.realpath(os.environ['MYLIBDIR']))
+except KeyError:
+    sys.path.insert(0, libpath)
+
+try:
+    import nagiosplugin
+    import liburl
+except ImportError as e:
+    print >>sys.stderr, ('Import Error: %s' % e)
+    sys.exit(2)
+
+PY3K = sys.version_info >= (3, 0)
+
+# only for Exception
+if not PY3K:
+    import urllib2
+else:
+    import urllib.request as urllib2
+
+import re
+import urllib
+
+__version__ = '0.1'
+__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+
+
+def dict_to_str(d):
+    line = ''
+    for k in d:
+        line += ('%s: %s\n' % (k, d[k]))
+    return line.strip()
+
+check = nagiosplugin.NagPlugin(pluginname=os.path.splitext(__file__)[0],
+                               tagstatusline='check_dexgate',
+                               description='check Dexgate DEREGISTERED Trunk',
+                               version=__version__)
+
+check.add_cmdlineoption('-H', '--hostname', 'host', 'IP or hostname',
+                        required=True)
+
+check.add_cmdlineoption('-p', '--port', 'port', 'Port to connect, default 80')
+
+check.add_cmdlineoption('-P', '--http-post-data', 'http_post_data',
+                        'HTTP POST request, paremeters must to be separated '
+                        'by comma, ex.: MODE=Main,PARAM_1=user,PARAM_2=pass',
+                        required=True)
+
+check.add_cmdlineoption('-G', '--http-get-request', 'http_get_request',
+                        'HTTP GET request, default MODE=TrunkList',
+                        default='MODE=TrunkList')
+
+check.add_cmdlineoption('-u', '--uri', 'uri',
+                        'URI, default: tegate/ServiceServlet',
+                        default='tegate/ServiceServlet')
+
+check.add_cmdlineoption('-a', '--authentication', 'authentication',
+                        'Username and password, separated by ":"')
+
+check.add_cmdlineoption('-S', '--ssl', 'ssl', 'Connect via SSL',
+                        action='store_true')
+
+check.add_cmdlineoption('-t', '--timeout', 'timeout',
+                        'HTTP timeout, default 10.0s', default=10.0,
+                        type=float)
+
+check.add_cmdlineoption('-D', '--debug', 'debug',
+                        'HTTP(S) debug, default False',
+                        action='store_true')
+
+
+check.parse_cmdlineoptions()
+
+(host,
+ port,
+ ssl,
+ uri,
+ authentication,
+ timeout,
+ http_post_data,
+ http_get_request,
+ debug) = (check.options.host,
+           check.options.port,
+           check.options.ssl,
+           check.options.uri,
+           check.options.authentication,
+           check.options.timeout,
+           check.options.http_post_data,
+           check.options.http_get_request,
+           check.options.debug)
+
+(OK, WARNING, CRITICAL, UNKNOWN) = range(0, 4)
+
+# fixed pattern
+session_id_pattern = re.compile('(SESSION_ID=.+)&MODE')
+deregistered_trunk_pattern = re.compile('DEREGISTERED')
+headers_post, headers_get = ('', '')
+
+_list = http_post_data.replace('=', ',').split(',')
+_dict = dict(_list[i:i+2] for i in range(0, len(_list), 2))
+
+try:
+    post_data = urllib.urlencode(_dict)
+except TypeError as e:
+    check.ret2nagios(CRITICAL, 'urlencode POST data: %s' % e)
+
+proto = 'https' if ssl else 'http'
+
+if ssl and not port:
+    port = 443
+elif not port:
+    port = 80
+
+if host.endswith('/'):
+    host = re.sub('/$', '', host)
+
+if uri:
+    if uri.startswith('/'):
+        uri = re.sub('^/', '', uri)
+    url = '%s://%s:%s/%s' % (proto, host, port, uri)
+else:
+    url = '%s://%s:%s/' % (proto, host, port)
+
+check.verbose(1, 'HTTP POST to %s' % url)
+check.verbose(1, 'POST data %s' % post_data)
+
+# HTTP POST
+try:
+    response_post = liburl.Request(url=url, data=post_data, timeout=timeout,
+                                   debug=debug, authentication=authentication)
+except ValueError as e:
+    check.ret2nagios(CRITICAL, '%s' % e)
+except urllib2.HTTPError as e:
+    check.ret2nagios(CRITICAL, '%s %s' % (e.code, e.reason))
+except urllib2.URLError as e:
+    check.ret2nagios(CRITICAL, '%s' % e.reason)
+
+# close HTTP connect
+response_post.close()
+check.verbose(1, 'HTTP code: %s' % response_post.code)
+check.verbose(1, 'HTTP headers:\n%s' % dict_to_str(response_post.headers))
+check.verbose(2, 'Source page\n %s' % ''.join(map(str, response_post.html)))
+
+if not response_post.html:
+    check.ret2nagios(CRITICAL, ('HTTP POST %r: empty response' % url))
+
+# search SESSION_ID
+for line in response_post.html:
+    m = session_id_pattern.search(line)
+    if m:
+        session_id = m.group(1)
+        break
+else:
+    check.ret2nagios(CRITICAL, 'SESSION_ID not found')
+
+# HTTP GET with SESSION_ID
+url = ('%s?%s&%s' % (url, session_id, http_get_request))
+check.verbose(1, 'HTTP GET to %s' % url)
+
+try:
+    response_get = liburl.Request(url=url, timeout=timeout, debug=debug)
+except ValueError as e:
+    check.ret2nagios(CRITICAL, '%s' % e)
+except urllib2.HTTPError as e:
+    check.ret2nagios(CRITICAL, '%s %s' % (e.code, e.reason))
+except urllib2.URLError as e:
+    check.ret2nagios(CRITICAL, '%s' % e.reason)
+
+# close HTTP connect
+response_get.close()
+check.verbose(1, 'HTTP code: %s' % response_get.code)
+check.verbose(1, 'HTTP headers:\n%s' % dict_to_str(response_get.headers))
+check.verbose(2, 'Source page\n %s' % ''.join(map(str, response_get.html)))
+
+if not response_get.html:
+    check.ret2nagios(CRITICAL, ('HTTP GET %r: empty response' % url))
+
+# search trunk DEREGISTERED
+for line in response_get.html:
+    if deregistered_trunk_pattern.search(line):
+        check.ret2nagios(CRITICAL, 'Trunk DEREGISTERED')
+
+check.ret2nagios(OK, 'Trunk REGISTERED')

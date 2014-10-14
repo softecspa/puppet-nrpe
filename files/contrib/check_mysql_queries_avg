@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+
+"""Nagios plugin check MySQL Queries Per Second Average."""
+
+import os
+import sys
+import time
+import re
+
+libpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
+try:
+    sys.path.insert(0, os.path.realpath(os.environ['MYLIBDIR']))
+except KeyError:
+    sys.path.insert(0, libpath)
+
+
+try:
+    import MySQLdb
+    import nagiosplugin
+except ImportError as e:
+    print >>sys.stderr, ('Import error: {0}'.format(e))
+    sys.exit(2)
+
+
+__version__ = '0.1'
+__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+
+
+def dbstat_to_dict(db_stat):
+    # join colon
+    _stat_jcolon = re.sub(r':\s', ':', db_stat.lower())
+    # join name with space
+    _stat_jspace = re.sub(r'([^\s])\s([a-z])', r'\1_\2', _stat_jcolon)
+    return dict([item.split(':') for item in _stat_jspace.split()])
+
+check = nagiosplugin.NagPlugin(pluginname=os.path.splitext(__file__)[0],
+                               tagstatusline='MySQL',
+                               description='check MySQL Queries Per Second '
+                               'Avg',
+                               version='0.1')
+
+check.add_cmdlineoption('-H', '--hostname', action='store', dest='host',
+                        help='ip or hostname', required=True)
+
+check.add_cmdlineoption('-t', '--timeout', dest='timeout', type=int,
+                        default=1, action='store',
+                        help='MySQL timeout connect, default 1s')
+
+check.add_cmdlineoption('-u', '--user', dest='user', action='store',
+                        help='username', required=True)
+
+check.add_cmdlineoption('-p', '--password', dest='password', action='store',
+                        help='password', required=True)
+
+check.add_cmdlineoption('-w', '--warning', dest='warning',
+                        type=float, action='store',
+                        help='warnign threshold',
+                        required=True)
+
+check.add_cmdlineoption('-c', '--critical', dest='critical',
+                        type=float, action='store',
+                        help='critical rhreshold',
+                        required=True)
+
+
+check.parse_cmdlineoptions()
+(OK, WARNING, CRITICAL, UNKNOWN) = range(0, 4)
+
+(host,
+ user,
+ password,
+ timeout,
+ warning,
+ critical) = (check.options.host,
+              check.options.user,
+              check.options.password,
+              check.options.timeout,
+              check.options.warning,
+              check.options.critical)
+
+start_time = time.time()
+
+try:
+    con = MySQLdb.connect(host=host,
+                          user=user,
+                          passwd=password,
+                          connect_timeout=timeout)
+    db_stat = con.stat()
+except MySQLdb.Error as e:
+    check.ret2nagios(CRITICAL, '[{0}]: {1}'.format(e.args[0], e.args[1]))
+finally:
+    try:
+        con.close()
+    except Exception:
+        pass
+
+elapsed_time = round((time.time() - start_time), 6)
+
+try:
+    dict_stat = dbstat_to_dict(db_stat)
+except TypeError as e:
+    check.ret2nagios(CRITICAL, '{0}'.format(e))
+
+queries_per_second_avg = float(dict_stat['queries_per_second_avg'])
+check.add_performancedata('queries_avg', queries_per_second_avg, '',
+                          warn=warning, crit=critical, min=0, max=critical)
+check.add_performancedata('time', elapsed_time, 's')
+check.add_returncode(check.value_wc_to_returncode(queries_per_second_avg,
+                                                  warning, critical))
+check.add_output('{0} Queries per second avg'.format(queries_per_second_avg))
+check.exit()
+
+# EOF

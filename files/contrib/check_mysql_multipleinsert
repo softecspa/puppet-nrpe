@@ -1,0 +1,184 @@
+#!/usr/bin/env python
+
+"""Nagios plugin, effettua un TRUNCATE e poi un numero di INSERT su uno
+specifico database calcolandone il tempo di esecuzione.
+
+Impostazione del database:
+
+mysql> CREATE DATABASE IF NOT EXISTS nagioscheck;
+mysql> USE nagioscheck;
+
+mysql> CREATE TABLE IF NOT EXISTS nagios_check(
+    id INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+    d1 VARCHAR(50),
+    d2 DECIMAL(10,5),
+    d3 VARCHAR(50)
+) TYPE=innodb;
+
+mysql> GRANT SELECT, DROP, INSERT ON nagioscheck.nagios_check TO
+    -> 'nagioscheck'@'%' IDENTIFIED BY 'changeme';
+
+mysql> FLUSH PRIVILEGES;
+
+"""
+
+import os
+import sys
+import time
+
+libpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
+try:
+    sys.path.insert(0, os.path.realpath(os.environ['MYLIBDIR']))
+except KeyError:
+    sys.path.insert(0, libpath)
+
+
+try:
+    import MySQLdb
+    import nagiosplugin
+except ImportError as e:
+    print >>sys.stderr, ('Import error: {0}'.format(e))
+    sys.exit(2)
+
+
+__version__ = '0.1'
+__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+
+
+check = nagiosplugin.NagPlugin(pluginname=os.path.splitext(__file__)[0],
+                               tagstatusline='MySQL',
+                               description='check MySQL multiple INSERT',
+                               version='0.1')
+
+check.add_cmdlineoption('-H', '--hostname', action='store', dest='host',
+                        help='ip or hostname', required=True)
+
+check.add_cmdlineoption('-t', '--timeout', dest='timeout', type=int,
+                        default=1, action='store',
+                        help='MySQL timeout connect, default 1s')
+
+check.add_cmdlineoption('-u', '--user', dest='user', action='store',
+                        help='username', required=True)
+
+check.add_cmdlineoption('-p', '--password', dest='password', action='store',
+                        help='password', required=True)
+
+check.add_cmdlineoption('-d', '--database', dest='database', action='store',
+                        help='database, default nagioscheck',
+                        default='nagioscheck')
+
+check.add_cmdlineoption('-T', '--table', dest='table', action='store',
+                        help='database table, default nagios_check',
+                        default='nagios_check')
+
+check.add_cmdlineoption('-n', '--number-of-insert', dest='numinsert',
+                        type=int, action='store', default=200,
+                        help='number of insert, default 200')
+
+check.add_cmdlineoption('-w', '--warning', dest='warning',
+                        type=float, action='store',
+                        help='warnign threshold in seconds',
+                        required=True)
+
+check.add_cmdlineoption('-c', '--critical', dest='critical',
+                        type=float, action='store',
+                        help='critical rhreshold in seconds',
+                        required=True)
+
+
+check.parse_cmdlineoptions()
+(OK, WARNING, CRITICAL, UNKNOWN) = range(0, 4)
+
+(host,
+ user,
+ password,
+ database,
+ table,
+ timeout,
+ numinsert,
+ warning,
+ critical) = (check.options.host,
+              check.options.user,
+              check.options.password,
+              check.options.database,
+              check.options.table,
+              check.options.timeout,
+              check.options.numinsert,
+              check.options.warning,
+              check.options.critical)
+
+if numinsert < 1:
+    check.parse_error('--number-of-insert must to be >= 1')
+
+d1 = 'wXpJSPFodfBwQPuaxgSAMpXExqiAFUAamvQMAnoVzVjgtnHNwx'
+d2 = 3.14159
+d3 = 'SWdHSGmsPkdJXzAbmyqpFmNxKdtrAutvHPpqsIQICPnmrnuVbZ'
+
+insert = (
+    'INSERT INTO {0}.{1} (d1, d2, d3) VALUES (\'{2}\', {3}, \'{4}\')'.
+    format(database, table, d1, d2, d3)
+)
+
+lastrowid = 0
+start_time = time.time()
+
+try:
+    con = MySQLdb.connect(host=host,
+                          user=user,
+                          passwd=password,
+                          db=database,
+                          connect_timeout=timeout)
+except MySQLdb.Error as e:
+    check.ret2nagios(CRITICAL, '[{0}]: {1}'.format(e.args[0], e.args[1]))
+
+try:
+    check.verbose(1, 'MySQL USE {0}'.format(database))
+    con.select_db(database)
+    cur = con.cursor()
+    truncate_table = 'TRUNCATE TABLE {0}'.format(table)
+    check.verbose(1, 'MySQL {0}'.format(truncate_table))
+    cur.execute(truncate_table)
+except MySQLdb.Error as e:
+    check.ret2nagios(CRITICAL, '[{0}]: {1}'.format(e.args[0], e.args[1]))
+    con.close()
+
+try:
+    for i in range(numinsert):
+        cur.execute(insert)
+    check.verbose(1, 'MySQL commits transaction')
+    con.commit()
+    check.verbose(1, 'MySQL {0} * {1}'.format(numinsert, insert))
+except MySQLdb.Error as e:
+    con.rollback()
+    check.ret2nagios(CRITICAL, '[{0}]: {1}'.format(e.args[0], e.args[1]))
+finally:
+    check.verbose(1, 'MySQL close()')
+    con.close()
+    lastrowid = cur.lastrowid
+
+elapsed_time = round((time.time() - start_time), 6)
+
+check.add_performancedata(
+    'time', elapsed_time, 's', warn=warning, crit=critical,
+    min=0, max=critical
+)
+
+if lastrowid != numinsert:
+    check.add_output(
+        '{0} INSERT to {1}.{2} should be {3}'.format(
+            lastrowid, database, table, numinsert)
+    )
+    check.add_returncode(CRITICAL)
+    check.exit()
+
+check.add_output(
+    '{0} INSERT to {1}.{2}'.format(lastrowid, database, table)
+)
+
+check.add_returncode(
+    check.value_wc_to_returncode(elapsed_time, warning, critical)
+)
+
+check.exit()
+
+# EOF

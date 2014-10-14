@@ -1,0 +1,112 @@
+#!/usr/bin/env python
+
+"""semplice plugin per testare il login su un server IMAP4.
+
+FIXME: pare che la libreria non possa definire un timeout
+per la connessione.
+
+"""
+
+import os
+import imaplib
+import socket
+import sys
+
+__version__ = '0.1 alpha'
+__author__ = 'Lorenzo Cocchi <lorenzo.cocchi@softecspa.it>'
+
+libpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
+try:
+    sys.path.insert(0, os.path.realpath(os.environ['MYLIBDIR']))
+except KeyError:
+    sys.path.insert(0, libpath)
+
+import nagiosplugin
+
+check = nagiosplugin.NagPlugin(pluginname=os.path.splitext(__file__)[0],
+                               tagstatusline='IMAP4',
+                               description='check IMAP4',
+                               version='0.1 alpha')
+
+check.add_cmdlineoption('-H', '--hostname', 'host', 'Hostname or IP address',
+                        required=True)
+check.add_cmdlineoption('-P', '--port', 'port',
+                        'Port to connect', type=int)
+check.add_cmdlineoption('-u', '--user', 'user', 'Username',
+                        required=True)
+check.add_cmdlineoption('-p', '--password', 'password', 'Password',
+                        required=True)
+check.add_cmdlineoption('-s', '--use-ssl', 'use_ssl',
+                        'Connects over an SSL encrypted socket, default False',
+                        action='store_true')
+check.add_cmdlineoption('-f', '--folder', 'folder',
+                        'IMAP folder, default INBOX', default='INBOX')
+check.add_cmdlineoption('-D', '--debug', 'debug',
+                        'Debug level, from 0 to 5, default 0',
+                        default=0, type=int)
+check.add_cmdlineoption('-t', '--timeout', 'timeout',
+                        'IMAP timeout connect, default 5s',
+                        default=5, type=int)
+
+check.parse_cmdlineoptions()
+
+if check.options.debug < 0 or check.options.debug > 5:
+    check.parse_error('Debug level must to be: from 0 to 5')
+
+(host,
+ port,
+ user,
+ password,
+ folder,
+ debug,
+ use_ssl,
+ timeout) = (check.options.host,
+             check.options.port,
+             check.options.user,
+             check.options.password,
+             check.options.folder,
+             check.options.debug,
+             check.options.use_ssl,
+             check.options.timeout)
+
+(OK, WARNING, CRITICAL, UNKNOWN) = range(0, 4)
+
+if port:
+    if use_ssl:
+        imaplib.IMAP_SSL_PORT = port
+    else:
+        imaplib.IMAP_PORT = port
+
+socket.setdefaulttimeout(timeout)
+imaplib.Debug = debug
+
+check.verbose(
+    1, 'host=%s, ssl=%s, timeout=%s, debug=%s' %
+    (host, use_ssl, timeout, debug)
+)
+
+try:
+    if use_ssl:
+        mail = imaplib.IMAP4_SSL(host=host)
+    else:
+        mail = imaplib.IMAP4(host=host)
+    mail.login(user, password)
+except imaplib.IMAP4.error as e:
+    check.ret2nagios(CRITICAL, ('IMAP %s' % e))
+except socket.timeout as e:
+    check.ret2nagios(CRITICAL, ('socket %s' % e))
+except socket.error as e:
+    check.ret2nagios(CRITICAL, ('socket %s' % e))
+
+check.verbose(1, 'select %s folder' % (folder))
+result, data = mail.select(folder, readonly=True)
+if result != 'OK':
+    check.ret2nagios(CRITICAL, ('%s' % data[0]))
+
+try:
+    mail.close()
+except Exception:
+    pass
+mail.logout()
+
+check.ret2nagios(OK, ('%s contains %s posts' % (folder, data[0])))
