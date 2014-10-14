@@ -46,11 +46,6 @@ define nrpe::check_diskio (
   )
 {
 
-  file { '/usr/local/bin/root_device':
-    source      => 'puppet:///modules/nrpe/bin/root_device',
-    require => File['/usr/local/lib/bash'],
-  }
-
   #TODO: eliminare, serve a rimuovere il vecchio check.
   if $root_dev != undef {
 
