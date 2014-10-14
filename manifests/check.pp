@@ -50,12 +50,6 @@ define nrpe::check(
   $sudo             = false,
 )
 {
-  File {
-    owner   => root,
-    group   => nagios,
-    mode    => 640,
-  }
-
   # realcheckname is used only in template
   $realcheckname = $checkname ? {
     false   => "check_${name}",
@@ -86,6 +80,7 @@ define nrpe::check(
         source  => $checksource,
         owner   => 'root',
         group   => 'nagios',
+        require => Package['nagios-nrpe-server'],
       }
     }
   }
@@ -97,6 +92,9 @@ define nrpe::check(
       file { "${checkpath}/${command}":
         ensure  => present,
         mode    => '0775',
+        owner   => 'root',
+        group   => 'nagios',
+        require => Package['nagios-nrpe-server']
       }
     }
   }
@@ -106,6 +104,9 @@ define nrpe::check(
 
   file { "${nrpe::nagiosconfdir}/${realcheckname}.cfg":
     ensure  => $ensure,
+    owner   => 'root',
+    group   => 'nagios',
+    mode    => '0640',
     content => template('nrpe/check.cfg.erb'),
     require => [ Package['nagios-nrpe-server'], File["$checkpath/$command"] ],
     notify  => Service['nagios-nrpe-server'],
