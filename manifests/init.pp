@@ -81,6 +81,12 @@ class nrpe ($allowed_hosts)
     require => File[$nagiosconfdir],
   }
 
+  # TODO: eliminare, serve solo ad eliminare il vecchio file
+  file { "${nagiosconfdir}/softec.cfg":
+    ensure  => absent,
+    notify  => Service['nagios-nrpe-server'],
+  }
+
   # contrib plugins (pushati ricorsivamente, #587)
   # TODO: modalita' deprecata: meglio mettere il plugin aggiuntivo insieme al check, cosi' si pusha dove serve
   file { $nagiospluginscontrib:
