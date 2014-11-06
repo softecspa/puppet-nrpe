@@ -12,7 +12,11 @@ define nrpe::check_memcache (
   $host = inline_template("<%= @real_host_port.split(':').at(0) %>")
   $port = inline_template("<%= @real_host_port.split(':').at(1) %>")
 
-  package {'libcache-memcached-perl': ensure => present,}
+  if !defined(Package['libcache-memcached-perl']) { 
+    package {'libcache-memcached-perl':
+      ensure => present,
+    }
+  }
 
   nrpe::check{ "memcache_${host}_${port}":
     binary_name => 'check_memcached.pl',
