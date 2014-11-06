@@ -19,7 +19,8 @@ define nrpe::check_memcache (
   }
 
   nrpe::check{ "memcache_${host}_${port}":
-    binary_name => 'check_memcached.pl',
+    contrib     => 'true',
+    binaryname  => 'check_memcached.pl',
     params      => "-H ${host} -p ${port} -T'>1,>2' -R '<40,<30' -U '>95,>98'"
   }
 
