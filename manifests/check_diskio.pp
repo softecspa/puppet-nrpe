@@ -86,6 +86,7 @@ define nrpe::check_diskio (
     }
   } else {
 
+    include perl
     perl::cpan::module {'Nagios::Plugin':}
     perl::cpan::module {'Array::Unique':}
 
