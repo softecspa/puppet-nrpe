@@ -40,14 +40,15 @@
 #                   template used by nagios check, default value is 'generic_service'
 #
 define nrpe::check(
-  $ensure           = present,
-  $contrib          = false,
-  $source           = false,
-  $binaryname       = false,
-  $checkname        = false,
-  $params           = '',
-  $service_template = 'generic-service',
-  $sudo             = false,
+  $ensure                  = present,
+  $contrib                 = false,
+  $source                  = false,
+  $binaryname              = false,
+  $checkname               = false,
+  $params                  = '',
+  $service_template        = 'generic-service',
+  $sudo                    = false,
+  $export_service_resource = true,
 )
 {
   # realcheckname is used only in template
@@ -99,8 +100,7 @@ define nrpe::check(
     }
   }
 
-  # debug
-  #notice ("Nrpe command for ${realcheckname} is ${checkpath}/${command}")
+  # debug("Nrpe command for ${realcheckname} is ${checkpath}/${command}")
 
   file { "${nrpe::nagiosconfdir}/${realcheckname}.cfg":
     ensure  => $ensure,
@@ -113,12 +113,13 @@ define nrpe::check(
   }
 
   # Check exported for the nagios host
-  @@nagios_service { "check_${realcheckname}_${::hostname}":
-    use                   => $service_template,
-    target                => "/etc/nagios/puppet/${::hostname}.cfg",
-    host_name             => $::hostname,
-    service_description   => "Check ${realcheckname} on ${::fqdn}",
-    check_command         => "check_nrpe!${realcheckname}",
+  if $export_service_resource {
+    @@nagios_service { "check_${realcheckname}_${::hostname}":
+      use                 => $service_template,
+      target              => "/etc/nagios/puppet/${::hostname}.cfg",
+      host_name           => $::hostname,
+      service_description => "Check ${realcheckname} on ${::fqdn}",
+      check_command       => "check_nrpe!${realcheckname}",
+    }
   }
-
 }
