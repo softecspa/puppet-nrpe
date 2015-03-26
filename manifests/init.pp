@@ -39,7 +39,7 @@ class nrpe ($allowed_hosts)
   if $::lsbdistid == 'Ubuntu' {
     package { 'nagios-plugins-extra':
         ensure => present;
-      }
+    }
   }
 
   package {
