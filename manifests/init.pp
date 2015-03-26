@@ -36,11 +36,16 @@ class nrpe ($allowed_hosts)
     "libparams-validate-perl":      ensure => present;
   }
 
+  if $::lsbdistid == 'Ubuntu' {
+    package { 'nagios-plugins-extra':
+        ensure => present;
+      }
+  }
+
   package {
-    'nagios-nrpe-server':       ensure	=> present;
-    'nagios-plugins-basic':     ensure	=> present;
-    'nagios-plugins-standard':  ensure	=> present;
-    'nagios-plugins-extra':     ensure	=> present;
+    'nagios-nrpe-server':       ensure => present;
+    'nagios-plugins-basic':     ensure => present;
+    'nagios-plugins-standard':  ensure => present;
   }
 
   # inclusione directory 'conf.d' nell nrpe server
