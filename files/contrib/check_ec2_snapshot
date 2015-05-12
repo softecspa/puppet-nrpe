@@ -1,0 +1,76 @@
+#!/bin/bash
+#
+# Author:  Matteo Capaccioli
+# Contrib: Lorenzo Cocchi
+
+# Exit status
+OK_STATE=0
+WARNING_STATE=1
+CRITICAL_STATE=2
+UNKNOWN_STATE=3
+
+# Include conf. per ec2 tools
+. /usr/local/etc/ec2_vars.conf || exit ${UNKNOWN_STATE}
+
+# Id del volume
+VOLUME="$1"
+
+# Ore trascorse dall'ultimo snapshot effettuato
+MAX_HOURS="$2"
+
+# Controllo sui parametri
+if [ "$1" = "" -o "$2" = "" ]; then
+	echo "Error: you must specify the Volume-ID and Max-Hours"
+	echo ""
+	echo "Example: $0 vol-xxxxxxxx 24"
+	exit ${UNKNOWN_STATE}
+fi
+
+if [ "$2" -le 0 -o "$2" -gt 8760 ]; then
+	echo "Error: $2 must be between 1 and 8760=1yr"
+	echo ""
+	echo "Example: $0 vol-xxxxxxxx 24"
+	exit ${UNKNOWN_STATE}
+fi
+
+# Calcolo N ore +4h per la creazione degli snapshot
+MAX_SECONDS="`echo ${MAX_HOURS} \* 3600 + 14400 | bc`"
+
+LAST_SNAPSHOT="$(ec2-describe-snapshots -F volume-id=${VOLUME} | awk '{if($4 ~ /completed/ && $6 ~ /100/) print $0}' | sort -k5 -r | head -n1)"
+
+# Data dell'ultimo snapshot del volume specificato
+#for ((count=1; count <=3; count++)); do
+#    LAST_SNAPSHOT="$(ec2-describe-snapshots -F volume-id=${VOLUME} | awk '{if($4 ~ /completed/ && $6 ~ /100/) print $0}' | sort -k5 -r | head -n1)"
+#    if [ -n "${LAST_SNAPSHOT}" ]; then
+#        break
+#    fi
+#    sleep 1
+#done
+
+if [ -z "${LAST_SNAPSHOT}" ]; then
+	echo "Error: bad output from ec2-describe-snapshots"
+	exit ${UNKNOWN_STATE}
+fi
+
+LAST_SNAPSHOT_DATE=$(echo ${LAST_SNAPSHOT} | awk '{print $5}')
+LAST_SNAPSHOT_ID=$(echo   ${LAST_SNAPSHOT} | awk '{print $2}')
+NOW_TIMESTAMP=$(date +%s)
+
+# Data dell'ultimo snapshot, in formato timestamp
+LAST_SNAPSHOT_TIMESTAMP="$(date +%s -d "$(echo "${LAST_SNAPSHOT_DATE}" | sed 's/T/ /g')")"
+
+# Secondi trascorsi dall'ultimo shapshot del volume specificato
+ELAPSED="`echo ${NOW_TIMESTAMP}-${LAST_SNAPSHOT_TIMESTAMP} | bc`"
+
+# Controllo sui secondi trascorsi
+if [ ${ELAPSED} -le ${MAX_SECONDS} ]; then
+	echo "OK: snapshot of ${VOLUME} is updated (${LAST_SNAPSHOT_ID} - ${LAST_SNAPSHOT_DATE})"
+	exit ${OK_STATE}
+else
+	echo "CRITICAL: snapshot of ${VOLUME} is NOT updated (${LAST_SNAPSHOT_ID} - ${LAST_SNAPSHOT_DATE})"
+	exit ${CRITICAL_STATE}
+fi
+
+exit ${UNKNOWN_STATE}
+
+# EOF
