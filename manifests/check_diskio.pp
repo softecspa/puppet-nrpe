@@ -40,23 +40,22 @@
 #
 define nrpe::check_diskio (
   $device   = $root_dev,
+  $volume   = 'root',
   $warn     = '41943040',
   $crit     = '52428800',
   $uom      = 'B',
-  )
+)
 {
 
-  #TODO: eliminare, serve a rimuovere il vecchio check.
-  if $root_dev != undef {
+  if $volume == 'root' {
+    $real_check_name = 'diskio'
+  } else {
+    $real_check_name = $volume
+  }
 
-    file {'/etc/nagios/conf.d/diskio.cfg':
-      ensure  => absent
-    }
-
-    nrpe::check { "diskio":
-      contrib     => true,
-      params      => "--device $device -w $warn -c $crit --uom=$uom",
-    }
+  nrpe::check { $real_check_name:
+    contrib => true,
+    params  => "--device ${device} -w ${warn} -c ${crit} --uom=${uom}",
   }
 
   if(!defined(Package['libreadonly-perl'])) {
@@ -76,7 +75,6 @@ define nrpe::check_diskio (
   }
 
   if ($lsbdistrelease >= 10) {
-
     if(!defined(Package['libnagios-plugin-perl'])) {
       package {'libnagios-plugin-perl': ensure => present,}
     }
@@ -85,10 +83,9 @@ define nrpe::check_diskio (
       package {'libarray-unique-perl': ensure => present,}
     }
   } else {
-
     include perl
     perl::cpan::module {'Nagios::Plugin':}
     perl::cpan::module {'Array::Unique':}
-
   }
+
 }
