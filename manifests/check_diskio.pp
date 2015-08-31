@@ -54,8 +54,9 @@ define nrpe::check_diskio (
   }
 
   nrpe::check { $real_check_name:
-    contrib => true,
-    params  => "--device ${device} -w ${warn} -c ${crit} --uom=${uom}",
+    binaryname => 'check_diskio',
+    contrib    => true,
+    params     => "--device ${device} -w ${warn} -c ${crit} --uom=${uom}",
   }
 
   if(!defined(Package['libreadonly-perl'])) {
