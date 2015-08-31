@@ -50,7 +50,7 @@ define nrpe::check_diskio (
   if $volume == 'root' {
     $real_check_name = 'diskio'
   } else {
-    $real_check_name = $volume
+    $real_check_name = "diskio_${volume}"
   }
 
   nrpe::check { $real_check_name:
